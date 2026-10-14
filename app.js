@@ -11,15 +11,17 @@ function bootMusic(host) {
   let view = 'play';
   const Root = shell.win();
   if (Root.__lxMusicAudio) Root.__lxMusicAudio.forEach((a) => { try { a.pause(); } catch (e) {} });
+  if (Root.__lxMusicSleep) clearTimeout(Root.__lxMusicSleep);
   const audio = [new Root.Audio(), new Root.Audio()];
   Root.__lxMusicAudio = audio;
   let slot = 0;
-  let sleepTimer = null;
+  let playGen = 0;
   let urls = {};
 
   function idb() {
+    const factory = (Root.indexedDB || indexedDB);
     return new Promise((resolve, reject) => {
-      const req = indexedDB.open(dbName, 1);
+      const req = factory.open(dbName, 1);
       req.onupgradeneeded = () => {
         const db = req.result;
         if (!db.objectStoreNames.contains('tracks')) db.createObjectStore('tracks', { keyPath: 'id' });
@@ -84,9 +86,15 @@ function bootMusic(host) {
 
   async function playIndex(i) {
     if (!meta.queue.length) { ui.toast('Очередь пуста'); return; }
+    const gen = ++playGen;
     meta.idx = (i + meta.queue.length) % meta.queue.length;
+    let guard = 0;
+    while (guard < meta.queue.length && (!current() || !current().blob)) {
+      meta.idx = (meta.idx + 1) % meta.queue.length;
+      guard++;
+    }
     const track = current();
-    if (!track || !track.blob) { ui.toast('Файл не найден на устройстве'); return; }
+    if (!track || !track.blob) { ui.toast('Файлы очереди не найдены на устройстве'); return; }
     const next = audio[slot ^ 1];
     const prev = audio[slot];
     next.src = urlFor(track);
@@ -99,10 +107,12 @@ function bootMusic(host) {
       ui.toast('Браузер не дал включить звук. Нажми ещё раз.');
       return;
     }
+    if (gen !== playGen) { try { next.pause(); } catch (err) {} return; }
     if (fade && !prev.paused) {
       const steps = 10;
       for (let s = 1; s <= steps; s++) {
         await wait((fade * 1000) / steps);
+        if (gen !== playGen) return;
         next.volume = Math.min(vol, (vol * s) / steps);
         prev.volume = Math.max(0, vol * (1 - s / steps));
       }
@@ -111,6 +121,7 @@ function bootMusic(host) {
       prev.pause();
       next.volume = vol;
     }
+    if (gen !== playGen) return;
     slot ^= 1;
     await saveMeta();
     render();
@@ -131,10 +142,10 @@ function bootMusic(host) {
   });
 
   function armSleep(min) {
-    if (sleepTimer) clearTimeout(sleepTimer);
-    sleepTimer = null;
+    if (Root.__lxMusicSleep) clearTimeout(Root.__lxMusicSleep);
+    Root.__lxMusicSleep = null;
     if (!min) { ui.toast('Таймер снят'); return; }
-    sleepTimer = setTimeout(() => { pause(); ui.toast('Таймер сна остановил плеер'); }, min * 60000);
+    Root.__lxMusicSleep = setTimeout(() => { pause(); ui.toast('Таймер сна остановил плеер'); }, min * 60000);
     ui.toast('Заснёт через ' + min + ' мин');
   }
 
